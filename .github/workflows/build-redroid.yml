@@ -1,0 +1,71 @@
+
+name: Build ReDroid 12 GApps ARM64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and Push ARM64 Image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+
+    steps:
+      - name: Check environment
+        run: |
+          uname -m
+          docker version
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git lzip python3-venv
+
+      - name: Download redroid-script
+        run: |
+          git clone --depth 1 \
+            https://github.com/ayasa520/redroid-script.git
+
+          python3 -m venv redroid-script/.venv
+          redroid-script/.venv/bin/pip install \
+            -r redroid-script/requirements.txt
+
+      - name: Build Android 12 with MindTheGapps
+        working-directory: redroid-script
+        run: |
+          set -euo pipefail
+
+          .venv/bin/python redroid.py -a 12.0.0 -mtg
+
+          docker image inspect \
+            redroid/redroid:12.0.0_mindthegapps
+
+          ARCH=$(docker image inspect \
+            --format '{{.Architecture}}' \
+            redroid/redroid:12.0.0_mindthegapps)
+
+          test "$ARCH" = "arm64"
+
+      - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io \
+            -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push image to GHCR
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/redroid12-gapps:arm64"
+
+          docker tag \
+            redroid/redroid:12.0.0_mindthegapps \
+            "$IMAGE"
+
+          docker push "$IMAGE"
+
+          echo "Image: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
