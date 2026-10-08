@@ -1,0 +1,8 @@
+# Do not commit Google/Chrome proprietary APKs or downloaded bundles.
+apks/
+chrome-bundle.zip
+*.apk
+*.apkm
+*.xapk
+.venv/
+__pycache__/

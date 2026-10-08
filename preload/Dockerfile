@@ -1,5 +1,6 @@
 FROM redroid/redroid:12.0.0_mindthegapps
 
+# Each directory contains the base APK and all required splits from the same version.
 COPY apks/chrome/ /system/etc/preload/chrome/
 COPY apks/trichrome/ /system/etc/preload/trichrome/
 

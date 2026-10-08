@@ -1,5 +1,4 @@
-
-name: Build Redroid 12 with GApps and Chrome
+name: Build redroid Android 12 + GApps + Chrome
 
 on:
   workflow_dispatch:
@@ -16,65 +15,73 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
-      - name: Install dependencies
+      - name: Validate Chrome bundle configuration
+        env:
+          CHROME_BUNDLE_URL: ${{ secrets.CHROME_BUNDLE_URL }}
+          CHROME_BUNDLE_SHA256: ${{ secrets.CHROME_BUNDLE_SHA256 }}
         run: |
+          set -euo pipefail
+          if [[ -z "$CHROME_BUNDLE_URL" || -z "$CHROME_BUNDLE_SHA256" ]]; then
+            echo "::error::Set repository Actions secrets CHROME_BUNDLE_URL and CHROME_BUNDLE_SHA256 before running."
+            exit 1
+          fi
+          if [[ "$CHROME_BUNDLE_URL" != https://* ]]; then
+            echo "::error::CHROME_BUNDLE_URL must be an HTTPS direct-download URL."
+            exit 1
+          fi
+          if [[ ! "$CHROME_BUNDLE_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            echo "::error::CHROME_BUNDLE_SHA256 must be a 64-character hex SHA-256."
+            exit 1
+          fi
+
+      - name: Download and validate Chrome/Trichrome APK bundle
+        env:
+          CHROME_BUNDLE_URL: ${{ secrets.CHROME_BUNDLE_URL }}
+          CHROME_BUNDLE_SHA256: ${{ secrets.CHROME_BUNDLE_SHA256 }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error             --proto '=https' --proto-redir '=https'             --retry 3 --connect-timeout 30             --output chrome-bundle.zip "$CHROME_BUNDLE_URL"
+          printf '%s  %s\n' "$CHROME_BUNDLE_SHA256" chrome-bundle.zip | sha256sum --check -
+          python3 scripts/unpack_chrome_bundle.py chrome-bundle.zip apks
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y git lzip python3-venv
-
-      - name: Download redroid-script
-        run: |
-          git clone --depth 1 \
-            https://github.com/ayasa520/redroid-script.git
-
+          git clone --depth 1 https://github.com/ayasa520/redroid-script.git
           python3 -m venv redroid-script/.venv
+          redroid-script/.venv/bin/pip install -r redroid-script/requirements.txt
 
-          redroid-script/.venv/bin/pip install \
-            -r redroid-script/requirements.txt
-
-      - name: Build GApps base image
+      - name: Build ARM64 Android 12 + MindTheGapps
         working-directory: redroid-script
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/redroid-cache
         run: |
-          set -e
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
           .venv/bin/python redroid.py -a 12.0.0 -mtg
+          docker image inspect redroid/redroid:12.0.0_mindthegapps >/dev/null
+          test "$(docker image inspect --format '{{.Architecture}}' redroid/redroid:12.0.0_mindthegapps)" = arm64
 
-          docker image inspect \
-            redroid/redroid:12.0.0_mindthegapps
-
-      - name: Validate Chrome APK files
+      - name: Assemble Chrome-preloaded image
         run: |
-          set -e
-          find apks/chrome -name '*.apk' | grep -q .
-          find apks/trichrome -name '*.apk' | grep -q .
+          set -euo pipefail
+          docker build --platform linux/arm64             -f preload/Dockerfile             -t redroid12-gapps-chrome:arm64 .
+          test "$(docker image inspect --format '{{.Architecture}}' redroid12-gapps-chrome:arm64)" = arm64
 
-      - name: Build Chrome image
-        run: |
-          docker build \
-            -f preload/Dockerfile \
-            -t redroid12-gapps-chrome:arm64 \
-            .
-
-          ARCH=$(docker image inspect \
-            --format '{{.Architecture}}' \
-            redroid12-gapps-chrome:arm64)
-
-          test "$ARCH" = "arm64"
-
-      - name: Login to GHCR
+      - name: Sign in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "$GHCR_TOKEN" | docker login ghcr.io \
-            -u "$GITHUB_ACTOR" \
-            --password-stdin
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
       - name: Push image
         run: |
+          set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/redroid12-gapps-chrome:arm64"
-
           docker tag redroid12-gapps-chrome:arm64 "$IMAGE"
           docker push "$IMAGE"
-
-          echo "Image: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published: `$IMAGE`" >> "$GITHUB_STEP_SUMMARY"
