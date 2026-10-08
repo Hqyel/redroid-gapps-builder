@@ -1,5 +1,5 @@
 
-name: Build ReDroid 12 GApps ARM64
+name: Build Redroid 12 with GApps and Chrome
 
 on:
   workflow_dispatch:
@@ -10,16 +10,14 @@ permissions:
 
 jobs:
   build:
-    name: Build and Push ARM64 Image
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
 
     steps:
-      - name: Check environment
-        run: |
-          uname -m
-          docker version
-          df -h
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Install dependencies
         run: |
@@ -32,22 +30,35 @@ jobs:
             https://github.com/ayasa520/redroid-script.git
 
           python3 -m venv redroid-script/.venv
+
           redroid-script/.venv/bin/pip install \
             -r redroid-script/requirements.txt
 
-      - name: Build Android 12 with MindTheGapps
+      - name: Build GApps base image
         working-directory: redroid-script
         run: |
-          set -euo pipefail
-
+          set -e
           .venv/bin/python redroid.py -a 12.0.0 -mtg
 
           docker image inspect \
             redroid/redroid:12.0.0_mindthegapps
 
+      - name: Validate Chrome APK files
+        run: |
+          set -e
+          find apks/chrome -name '*.apk' | grep -q .
+          find apks/trichrome -name '*.apk' | grep -q .
+
+      - name: Build Chrome image
+        run: |
+          docker build \
+            -f preload/Dockerfile \
+            -t redroid12-gapps-chrome:arm64 \
+            .
+
           ARCH=$(docker image inspect \
             --format '{{.Architecture}}' \
-            redroid/redroid:12.0.0_mindthegapps)
+            redroid12-gapps-chrome:arm64)
 
           test "$ARCH" = "arm64"
 
@@ -56,16 +67,14 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GHCR_TOKEN" | docker login ghcr.io \
-            -u "$GITHUB_ACTOR" --password-stdin
+            -u "$GITHUB_ACTOR" \
+            --password-stdin
 
-      - name: Push image to GHCR
+      - name: Push image
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/redroid12-gapps:arm64"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/redroid12-gapps-chrome:arm64"
 
-          docker tag \
-            redroid/redroid:12.0.0_mindthegapps \
-            "$IMAGE"
-
+          docker tag redroid12-gapps-chrome:arm64 "$IMAGE"
           docker push "$IMAGE"
 
           echo "Image: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
